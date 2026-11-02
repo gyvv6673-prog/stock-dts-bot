@@ -2,7 +2,11 @@ index.js const { default: makeWASocket, useMultiFileAuthState, downloadMediaMess
 const qrcode = require("qrcode-terminal");
 const fs = require("fs");
 const P = require("pino")({ level: "silent" });
-
+// Petit serveur pour que Render ne dise pas "Deploy failed"
+const express = require('express');
+const app = express();
+app.get('/', (req,res) => res.send('BOT STOCK DTS en ligne - 771269905'));
+app.listen(process.env.PORT || 10000, () => console.log('Serveur web OK sur port '+ (process.env.PORT || 10000)));
 let STOCK = {};
 if(fs.existsSync("stock.json")) STOCK = JSON.parse(fs.readFileSync("stock.json"));
 
