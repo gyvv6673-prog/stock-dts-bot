@@ -1,76 +1,61 @@
-index.js const { default: makeWASocket, useMultiFileAuthState, downloadMediaMessage, DisconnectReason } = require("@whiskeysockets/baileys");
-const qrcode = require("qrcode-terminal");
-const fs = require("fs");
-const P = require("pino")({ level: "silent" });
-// Petit serveur pour que Render ne dise pas "Deploy failed"
+const { default: makeWASocket, useMultiFileAuthState, DisconnectReason } = require('@whiskeysockets/baileys');
+const P = require('pino');
 const express = require('express');
+const QRCode = require('qrcode');
+
+const GOOGLE_SHEET_URL = "https://script.google.com/macros/s/AKfycby2pGi3_Xbisrn22e4D74KUAMtgwm3F6FIfJ-OJEck7sJac6QFWXDfqEh0jqmpA0G6N/exec";
+
 const app = express();
-app.get('/', (req,res) => res.send('BOT STOCK DTS en ligne - 771269905'));
-app.listen(process.env.PORT || 10000, () => console.log('Serveur web OK sur port '+ (process.env.PORT || 10000)));
-let STOCK = {};
-if(fs.existsSync("stock.json")) STOCK = JSON.parse(fs.readFileSync("stock.json"));
+let latestQR = null;
 
-async function start() {
-  const { state, saveCreds } = await useMultiFileAuthState('./auth');
-  const sock = makeWASocket({ auth: state, logger: P, printQRInTerminal: false });
+app.get('/', (req,res) => {
+  if(latestQR) res.send(`<h1>QR POUR 762662699</h1><img src="${latestQR}" width="350"><br><a href="/">Rafraichir</a>`);
+  else res.send(`<h1>✅ BOT 762662699 EN LIGNE</h1><p>Stock lié à Google Sheet</p>`);
+});
+app.get('/ping', (req,res) => res.send('ok'));
+app.listen(process.env.PORT || 10000, () => console.log('Serveur OK'));
 
+async function getStock() {
+  const r = await fetch(`${GOOGLE_SHEET_URL}?action=stock`);
+  return await r.text();
+}
+async function vendu(article, qte) {
+  const r = await fetch(`${GOOGLE_SHEET_URL}?action=vendu&article=${article}&qte=${qte}`);
+  return await r.text();
+}
+
+async function startBot() {
+  const { state, saveCreds } = await useMultiFileAuthState('auth_info_baileys');
+  const sock = makeWASocket({ auth: state, logger: P({ level: 'silent' }) });
   sock.ev.on('creds.update', saveCreds);
-
   sock.ev.on('connection.update', async (u) => {
     const { connection, lastDisconnect, qr } = u;
-    if(qr) { console.log("=== SCANNE CE QR AVEC 771269905 ==="); qrcode.generate(qr, { small: true }); }
-    if(connection === 'open') console.log("✅ BOT CONNECTÉ - 771269905 peut être éteint maintenant");
-    if(connection === 'close' && lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut) start();
-  });
-
-  sock.ev.on('messages.upsert', async ({ messages }) => {
-    const m = messages[0];
-    if(!m.message) return;
-    const from = m.key.remoteJid;
-    const text = m.message.conversation || m.message.extendedTextMessage?.text || m.message.documentMessage?.caption || "";
-    
-    console.log(`Message de ${from}: ${text.substring(0,50)}`);
-
-    // AFFICHE L'ID DE TES GROUPES DANS LES LOGS
-    if(from.endsWith("@g.us")) console.log(`ID GROUPE DETECTÉ: ${from} - Nom: ${m.pushName} - Texte: ${text}`);
-
-    // 1. SI MESSAGE DANS STOCK DTS AVEC FICHIER = SAUVEGARDE
-    if(m.message.documentMessage){
-      let doc = m.message.documentMessage;
-      let ref = (doc.caption || doc.fileName || "").split('.')[0].toUpperCase().trim(); // REF12
-      if(!ref.startsWith("REF")) ref = "REF" + Date.now();
-      let buffer = await downloadMediaMessage(m, 'buffer', {}, { logger: P });
-      STOCK[ref] = { buffer: buffer.toString('base64'), fileName: doc.fileName || ref+".dst" };
-      fs.writeFileSync("stock.json", JSON.stringify(STOCK));
-      console.log(`✅ STOCK AJOUTÉ: ${ref} - ${doc.fileName}`);
-      await sock.sendMessage(from, { text: `✅ ${ref} ajouté au stock Render. Stock total: ${Object.keys(STOCK).length}` });
+    if(qr) { latestQR = await QRCode.toDataURL(qr); console.log('QR READY'); }
+    if(connection === 'close') {
+      if(lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut) startBot();
     }
-
-    // 2. SI COMMANDE VALIDE DEPUIS TON SITE
-    if(text.includes("COMMANDE VALIDE")){
-      try {
-        let refMatch = text.match(/Ref:(REF[0-9A-Z]+)/i);
-        let clientMatch = text.match(/Client:(221[0-9]+)/);
-        if(!refMatch || !clientMatch) return;
-        let ref = refMatch[1].toUpperCase();
-        let clientNum = clientMatch[1] + "@s.whatsapp.net";
-        
-        console.log(`COMMANDE: ${ref} pour ${clientNum}`);
-
-        if(!STOCK[ref]){
-          await sock.sendMessage(from, { text: `❌ Stock ${ref} introuvable. Vérifie groupe STOCK DTS` });
-          await sock.sendMessage(clientNum, { text: `Désolé, le fichier ${ref} n'est pas encore dans le stock STOCK DTS. Contacte 771269905` });
-          return;
-        }
-
-        let file = STOCK[ref];
-        let buff = Buffer.from(file.buffer, 'base64');
-        await sock.sendMessage(clientNum, { document: buff, mimetype: 'application/octet-stream', fileName: file.fileName });
-        await sock.sendMessage(clientNum, { text: `✅ Voici ton fichier *${ref}* depuis STOCK DTS ! Merci pour ton achat 1000F. ID validé.` });
-        await sock.sendMessage(from, { text: `✅ ${ref} envoyé à ${clientMatch[1]}` });
-        console.log(`ENVOYÉ ${ref} à ${clientNum}`);
-      } catch(e){ console.log("Erreur commande", e); }
+    if(connection === 'open') { console.log('✅ CONNECTE 762662699'); latestQR = null; }
+  });
+  sock.ev.on('messages.upsert', async (m) => {
+    const msg = m.messages[0];
+    if(!msg || !msg.message || msg.key.fromMe) return;
+    const from = msg.key.remoteJid;
+    let text = (msg.message.conversation || msg.message.extendedTextMessage?.text || '').toLowerCase().trim();
+    console.log(`Message: ${text}`);
+    if(text === 'stock' || text.includes('stock')) {
+      let rep = await getStock();
+      await sock.sendMessage(from, { text: rep });
+    }
+    else if(text.startsWith('vendu')) {
+      let p = text.split(' ');
+      if(p.length >=3) {
+        let rep = await vendu(p[1], p[2]);
+        await sock.sendMessage(from, { text: rep });
+      }
+    }
+    else if(text === 'menu' || text === 'salam' || text === 'bonjour') {
+      await sock.sendMessage(from, { text: "*DTS BOUTIQUE 762662699*\nTape *stock*" });
     }
   });
 }
-start();
+startBot();
